@@ -4,6 +4,7 @@ import javafx.application.Application;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.input.KeyCode;
 import javafx.scene.layout.*;
 import javafx.stage.Stage;
 
@@ -29,14 +30,24 @@ public class HelloApplication extends Application {
         Button sendButton = new Button("Senden");
         sendButton.setStyle("-fx-background-color: #4CAF50; -fx-text-fill: white;");
 
-        // Button-Click-Event
-        sendButton.setOnAction(event -> {
+        // Methode zum Senden der Nachricht
+        Runnable sendMessage = () -> {
             String message = messageField.getText().trim();
             if (!message.isEmpty()) {
                 // Nachricht in den Chatbereich einfügen
                 chatArea.appendText("Du: " + message + "\n");
                 messageField.clear();  // Eingabefeld leeren
                 chatArea.setScrollTop(Double.MAX_VALUE); // Scrollen zum neuesten Eintrag
+            }
+        };
+
+        // Button-Click-Event
+        sendButton.setOnAction(event -> sendMessage.run());
+
+        // Enter-Key-Trigger
+        messageField.setOnKeyPressed(event -> {
+            if (event.getCode() == KeyCode.ENTER) {
+                sendMessage.run();
             }
         });
 

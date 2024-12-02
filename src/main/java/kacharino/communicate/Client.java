@@ -74,5 +74,3 @@ public class Client implements Runnable {
     }
 
 }
-
-// 23:00 https://www.youtube.com/watch?v=hIc_9Wbn704

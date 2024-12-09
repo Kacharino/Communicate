@@ -9,10 +9,9 @@ import java.util.concurrent.Executors;
 
 public class Server implements Runnable {
 
-    private ArrayList<ConnectionHandler> connections;
+    private final ArrayList<ConnectionHandler> connections;
     private ServerSocket server;
     private boolean done;
-    private ExecutorService pool;
 
     public Server() {
         connections = new ArrayList<>();
@@ -23,7 +22,7 @@ public class Server implements Runnable {
     public void run() {
         try {
             server = new ServerSocket(9696);
-            pool = Executors.newCachedThreadPool();
+            ExecutorService pool = Executors.newCachedThreadPool();
             while (!done) {
                 Socket client = server.accept();
                 ConnectionHandler handler = new ConnectionHandler(client);
@@ -58,10 +57,9 @@ public class Server implements Runnable {
     }
 
     class ConnectionHandler implements Runnable{
-        private Socket client;
+        private final Socket client;
         private BufferedReader in;
         private PrintWriter out;
-        private String nickname;
 
         public ConnectionHandler(Socket client) {
             this.client = client;
@@ -73,7 +71,7 @@ public class Server implements Runnable {
                 in = new BufferedReader(new InputStreamReader(client.getInputStream()));
                 out.println("Please enter a nickname: ");
                 // TODO: if statements um zu überprüfen, ob der eingegebene nickname valid ist
-                nickname = in.readLine();
+                String nickname = in.readLine();
                 System.out.println(nickname + " connected!");
                 broadcast(nickname + " joined the chat!");
                 String message;

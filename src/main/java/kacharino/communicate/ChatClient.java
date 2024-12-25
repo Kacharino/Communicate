@@ -1,6 +1,7 @@
 package kacharino.communicate;
 
 import javafx.application.Platform;
+import javafx.stage.Stage;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -22,8 +23,15 @@ public class ChatClient implements Runnable {
             in = new BufferedReader(new InputStreamReader(client.getInputStream()));
 
             // Pass the ChatClient instance to the MessengerApp
-            MessengerApp.setClient(this);
+            Platform.runLater(() -> MessengerApp.setClient(this));
 
+            // Read and display the initial username prompt
+            String promptMessage = in.readLine(); // First message from server
+            if (promptMessage != null) {
+                Platform.runLater(() -> MessengerApp.displayMessage(promptMessage));
+            }
+
+            // Read and display subsequent messages
             String message;
             while ((message = in.readLine()) != null) {
                 String finalMessage = message;
@@ -37,6 +45,7 @@ public class ChatClient implements Runnable {
     public void sendMessage(String message) {
         if (out != null) {
             out.println(message);
+            out.flush();
         }
     }
 
@@ -51,10 +60,20 @@ public class ChatClient implements Runnable {
     }
 
     public static void main(String[] args) {
-        ChatClient client = new ChatClient();
-        Thread clientThread = new Thread(client);
-        clientThread.start();
+        // Launch the UI and start the client logic
+        Platform.startup(() -> {
+            Stage primaryStage = new Stage();
+            MessengerApp messengerApp = new MessengerApp();
+            try {
+                messengerApp.start(primaryStage);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
 
-        MessengerApp.launch(MessengerApp.class, args);
+            // Start the ChatClient in a new thread
+            ChatClient client = new ChatClient();
+            Thread clientThread = new Thread(client);
+            clientThread.start();
+        });
     }
 }

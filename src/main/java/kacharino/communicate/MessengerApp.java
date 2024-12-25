@@ -2,12 +2,14 @@ package kacharino.communicate;
 
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
+import javafx.scene.paint.Color;
+import javafx.scene.text.Font;
 import javafx.stage.Stage;
-import kacharino.communicate.ChatClient;
 
 public class MessengerApp extends Application {
 
@@ -15,47 +17,60 @@ public class MessengerApp extends Application {
     private static TextArea messageArea;
     private TextField inputField;
     private Button sendButton;
-    private Button newClientButton;
 
     public static void setClient(ChatClient clientInstance) {
         client = clientInstance;
     }
 
     public static void displayMessage(String message) {
-        if (messageArea != null) {
-            Platform.runLater(() -> messageArea.appendText(message + "\n"));
-        }
+        Platform.runLater(() -> {
+            if (messageArea != null) {
+                messageArea.appendText(message + "\n");
+            } else {
+                System.out.println("Error: messageArea is null. Cannot display message: " + message);
+            }
+        });
     }
 
     @Override
     public void start(Stage primaryStage) {
         primaryStage.setTitle("Messenger App");
 
-        // Set up UI components
+        // Message Area Styling
         messageArea = new TextArea();
         messageArea.setEditable(false);
-        messageArea.setPrefHeight(400);
+        messageArea.setFont(Font.font("Arial", 14));
+        messageArea.setStyle("-fx-background-color: #f9f9f9; -fx-border-color: #cccccc; -fx-border-width: 1px;");
+        messageArea.setWrapText(true);
 
+        // Input Field Styling
         inputField = new TextField();
         inputField.setPromptText("Type a message...");
-        inputField.setPrefHeight(30);
+        inputField.setFont(Font.font("Arial", 14));
+        inputField.setStyle("-fx-background-color: #ffffff; -fx-border-color: #cccccc; -fx-border-width: 1px;");
+        inputField.setOnAction(event -> sendMessage());
 
+        // Send Button Styling
         sendButton = new Button("Send");
+        sendButton.setFont(Font.font("Arial", 14));
+        sendButton.setTextFill(Color.WHITE);
+        sendButton.setStyle("-fx-background-color: #4CAF50; -fx-border-radius: 5px; -fx-background-radius: 5px;");
         sendButton.setOnAction(event -> sendMessage());
+        sendButton.setPrefHeight(30);
 
-        newClientButton = new Button("Open New Client");
-        newClientButton.setOnAction(event -> openNewClientWindow());
-
-        VBox messageBox = new VBox(10, messageArea);
-        messageBox.setPrefHeight(500);
-
+        // Layout Styling
         HBox inputBox = new HBox(10, inputField, sendButton);
         inputBox.setAlignment(Pos.CENTER);
+        inputBox.setPadding(new Insets(10));
+        inputBox.setStyle("-fx-background-color: #f1f1f1; -fx-border-color: #cccccc; -fx-border-width: 1px;");
+        HBox.setHgrow(inputField, Priority.ALWAYS); // Make inputField expand in width
 
-        VBox root = new VBox(20, messageBox, inputBox, newClientButton);
-        root.setPadding(new javafx.geometry.Insets(20));
+        VBox root = new VBox(10, messageArea, inputBox);
+        root.setPadding(new Insets(10));
+        root.setStyle("-fx-background-color: #ffffff;");
+        root.setAlignment(Pos.TOP_CENTER);
 
-        Scene scene = new Scene(root, 400, 600);
+        Scene scene = new Scene(root, 500, 600); // Slightly larger UI
         primaryStage.setScene(scene);
         primaryStage.show();
     }
@@ -70,21 +85,6 @@ public class MessengerApp extends Application {
                 displayMessage("Error: Not connected to the server!");
             }
         }
-    }
-
-    private void openNewClientWindow() {
-        // Create a new client
-        ChatClient newClient = new ChatClient();
-        Thread newClientThread = new Thread(newClient);
-        newClientThread.start();
-
-        // Create a new stage for the new client
-        MessengerApp newMessengerApp = new MessengerApp();
-        newMessengerApp.setClient(newClient);
-
-        // Launch the new stage in a new window
-        Stage newStage = new Stage();
-        newMessengerApp.start(newStage); // Start the new client in a new window
     }
 
     public static void main(String[] args) {

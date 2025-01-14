@@ -3,155 +3,251 @@ package kacharino.communicate;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.ArrayList;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Server implements Runnable {
 
-    private final ArrayList<ConnectionHandler> connections;
-    private ServerSocket server;
-    private boolean done;
-    private final File chatHistoryFile;
+    private final ServerSocket server;
+    private boolean isRunning;
 
-    public Server() {
-        connections = new ArrayList<>();
-        done = false;
-        chatHistoryFile = new File("chat_history.txt"); // File to store chat history
+    private final List<ConnectionHandler> connections;
+    private final Map<String, ConnectionHandler> userMap;   // <--- NEU: username -> handler
+
+    private final File chatHistoryFile;
+    private final UserManager userManager;
+
+    public Server(int port) throws IOException {
+        this.server = new ServerSocket(port);
+        this.isRunning = true;
+        this.connections = new CopyOnWriteArrayList<>();
+        this.userMap = new ConcurrentHashMap<>();  // Thread-sicher
+        this.chatHistoryFile = new File("chat_history.txt");
+        this.userManager = new UserManager("users.txt");
     }
 
     @Override
     public void run() {
-        try {
-            server = new ServerSocket(9696);
-            ExecutorService pool = Executors.newCachedThreadPool();
-            while (!done) {
+        System.out.println("Server started on port " + server.getLocalPort());
+        while (isRunning) {
+            try {
                 Socket client = server.accept();
                 ConnectionHandler handler = new ConnectionHandler(client);
                 connections.add(handler);
-                pool.execute(handler);
+                new Thread(handler).start();
+            } catch (IOException e) {
+                if (isRunning) {
+                    System.err.println("Error accepting connection: " + e.getMessage());
+                }
             }
-        } catch (Exception e) {
-            shutdown();
         }
     }
 
-    public void broadcast(String message) {
-        // Append message to chat history file
+    /**
+     * Broadcast an alle (öffentliche Nachricht).
+     */
+    public synchronized void broadcast(String message) {
         saveMessageToFile(message);
-
-        // Broadcast the message to all clients
         for (ConnectionHandler ch : connections) {
-            if (ch != null) {
-                ch.sendMessage(message);
+            ch.sendMessage(message);
+        }
+    }
+
+    /**
+     * Direkte Nachricht an einen bestimmten User (falls online).
+     * Speichern wir ebenfalls in derselben History-Datei.
+     */
+    public synchronized void sendDirectMessage(String fromUser, String toUser, String msg) {
+        ConnectionHandler targetHandler = userMap.get(toUser);
+        ConnectionHandler fromHandler = userMap.get(fromUser);
+
+        String directMsg = "[DM] " + fromUser + " -> " + toUser + ": " + msg;
+        // In Datei speichern
+        saveMessageToFile(directMsg);
+
+        if (targetHandler != null) {
+            // An Empfänger schicken
+            targetHandler.sendMessage(directMsg);
+        } else {
+            // Empfänger nicht eingeloggt
+            if (fromHandler != null) {
+                fromHandler.sendMessage("User '" + toUser + "' not found or not logged in.");
             }
+        }
+
+        // Optional: auch an den Sender schicken, damit er sieht, was er verschickt hat.
+        if (fromHandler != null) {
+            fromHandler.sendMessage(directMsg);
         }
     }
 
     private void saveMessageToFile(String message) {
-        try (FileWriter writer = new FileWriter(chatHistoryFile, true)) {
-            writer.write(message + "\n");
+        try (FileWriter fw = new FileWriter(chatHistoryFile, true)) {
+            fw.write(message + "\n");
         } catch (IOException e) {
-            System.err.println("Error saving message to file: " + e.getMessage());
+            System.err.println("Error saving message: " + e.getMessage());
         }
     }
 
     private String loadChatHistory() {
         if (!chatHistoryFile.exists()) {
-            return ""; // No chat history yet
-        }
-        try (BufferedReader reader = new BufferedReader(new FileReader(chatHistoryFile))) {
-            StringBuilder history = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                history.append(line).append("\n");
-            }
-            return history.toString();
-        } catch (IOException e) {
-            System.err.println("Error reading chat history: " + e.getMessage());
             return "";
         }
+        StringBuilder sb = new StringBuilder();
+        try (BufferedReader br = new BufferedReader(new FileReader(chatHistoryFile))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                sb.append(line).append("\n");
+            }
+        } catch (IOException e) {
+            System.err.println("Error reading chat history: " + e.getMessage());
+        }
+        return sb.toString();
     }
 
     public void shutdown() {
+        isRunning = false;
         try {
-            done = true;
-            if (!server.isClosed()) {
-                server.close();
-            }
+            server.close();
             for (ConnectionHandler ch : connections) {
-                ch.shutdown();
+                ch.closeConnection();
             }
         } catch (IOException e) {
-            // ignore
+            System.err.println("Error closing server: " + e.getMessage());
         }
     }
 
-    class ConnectionHandler implements Runnable {
-        private final Socket client;
+    // =========================================================
+    // =============== INNER CLASS: ConnectionHandler ==========
+    // =========================================================
+    private class ConnectionHandler implements Runnable {
+
+        private final Socket socket;
         private BufferedReader in;
         private PrintWriter out;
-        private String nickname;
+        private boolean loggedIn;
+        private String username;
 
-        public ConnectionHandler(Socket client) {
-            this.client = client;
+        public ConnectionHandler(Socket socket) {
+            this.socket = socket;
+            this.loggedIn = false;
         }
 
         @Override
         public void run() {
             try {
-                out = new PrintWriter(client.getOutputStream(), true);
-                in = new BufferedReader(new InputStreamReader(client.getInputStream()));
+                in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                out = new PrintWriter(socket.getOutputStream(), true);
 
-                // Send chat history to the client
-                out.println("=== Chat History ===");
-                out.println(loadChatHistory());
-                out.println("====================");
+                out.println("Welcome to the Chat Server!");
+                out.println("Use: /login <user> <pass> or /register <user> <pass>");
 
-                // Prompt for a nickname
-                out.println("Please enter a nickname: ");
-                nickname = in.readLine();
-                if (nickname == null || nickname.trim().isEmpty()) {
-                    nickname = "Guest";
+                // Login-/Register-Schleife
+                while (!loggedIn) {
+                    String line = in.readLine();
+                    if (line == null) {
+                        closeConnection();
+                        return;
+                    }
+                    handleLoginRegister(line);
                 }
-                broadcast(nickname + " joined the chat!");
 
-                // Handle incoming messages
+                // Sende alten Chat-Verlauf
+                String history = loadChatHistory();
+                sendMessage("=== Chat History ===\n" + history + "====================");
+
+                // Nachrichten/Kommandos lesen
                 String message;
                 while ((message = in.readLine()) != null) {
-                    if (message.startsWith("/nick ")) {
-                        String[] messageSplit = message.split(" ", 2);
-                        if (messageSplit.length == 2) {
-                            broadcast(nickname + " renamed themselves to " + messageSplit[1]);
-                            nickname = messageSplit[1];
-                            out.println("Successfully changed nickname to " + nickname);
+                    if (message.startsWith("/quit")) {
+                        sendMessage("Goodbye!");
+                        closeConnection();
+                        return;
+
+                    } else if (message.startsWith("/dm ")) {
+                        // /dm Bob Hallo Bob!
+                        String[] parts = message.split(" ", 3);
+                        if (parts.length < 3) {
+                            sendMessage("Usage: /dm <username> <message>");
                         } else {
-                            out.println("No nickname provided!");
+                            String target = parts[1];
+                            String dmMsg = parts[2];
+                            sendDirectMessage(username, target, dmMsg);
                         }
-                    } else if (message.startsWith("/quit")) {
-                        broadcast(nickname + " left the chat!");
-                        shutdown();
+
                     } else {
-                        broadcast(nickname + ": " + message);
+                        // Öffentliche Nachricht an alle
+                        broadcast(username + ": " + message);
                     }
                 }
+
             } catch (IOException e) {
-                shutdown();
+                closeConnection();
             }
         }
 
-        public void sendMessage(String message) {
-            out.println(message);
+        private void handleLoginRegister(String input) {
+            if (input.startsWith("/login ")) {
+                String[] parts = input.split(" ", 3);
+                if (parts.length < 3) {
+                    sendMessage("Usage: /login <user> <pass>");
+                    return;
+                }
+                String user = parts[1];
+                String pass = parts[2];
+                if (!userManager.userExists(user)) {
+                    sendMessage("User does not exist. Try /register <user> <pass>.");
+                } else {
+                    if (userManager.checkPassword(user, pass)) {
+                        this.username = user;
+                        this.loggedIn = true;
+                        // In userMap eintragen, damit er DMs empfangen kann
+                        userMap.put(username, this);
+                        sendMessage("Login successful. Welcome, " + username + "!");
+                    } else {
+                        sendMessage("Wrong password. Try again.");
+                    }
+                }
+            } else if (input.startsWith("/register ")) {
+                String[] parts = input.split(" ", 3);
+                if (parts.length < 3) {
+                    sendMessage("Usage: /register <user> <pass>");
+                    return;
+                }
+                String user = parts[1];
+                String pass = parts[2];
+                if (userManager.userExists(user)) {
+                    sendMessage("User already exists. Try /login <user> <pass>.");
+                } else {
+                    boolean success = userManager.registerUser(user, pass);
+                    if (success) {
+                        sendMessage("Registration successful! You can now /login " + user + " <pass>.");
+                    } else {
+                        sendMessage("Registration failed. Please try again.");
+                    }
+                }
+            } else {
+                sendMessage("Please /login <user> <pass> or /register <user> <pass> first.");
+            }
         }
 
-        public void shutdown() {
+        public void sendMessage(String msg) {
+            out.println(msg);
+        }
+
+        public void closeConnection() {
             try {
-                in.close();
-                out.close();
-                if (!client.isClosed()) {
-                    client.close();
+                // Aus der userMap entfernen
+                if (username != null) {
+                    userMap.remove(username);
                 }
                 connections.remove(this);
+
+                if (in != null) in.close();
+                if (out != null) out.close();
+                if (!socket.isClosed()) socket.close();
             } catch (IOException e) {
                 // ignore
             }
@@ -159,7 +255,11 @@ public class Server implements Runnable {
     }
 
     public static void main(String[] args) {
-        Server server = new Server();
-        server.run();
+        try {
+            Server server = new Server(9696);
+            new Thread(server).start();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 }

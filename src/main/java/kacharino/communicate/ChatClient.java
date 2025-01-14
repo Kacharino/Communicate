@@ -22,19 +22,13 @@ public class ChatClient implements Runnable {
             out = new PrintWriter(client.getOutputStream(), true);
             in = new BufferedReader(new InputStreamReader(client.getInputStream()));
 
-            // Pass the ChatClient instance to the MessengerApp
+            // Geben wir dem MessengerApp Bescheid
             Platform.runLater(() -> MessengerApp.setClient(this));
 
-            // Read and display the initial username prompt
-            String promptMessage = in.readLine(); // First message from server
-            if (promptMessage != null) {
-                Platform.runLater(() -> MessengerApp.displayMessage(promptMessage));
-            }
-
-            // Read and display subsequent messages
+            // Lies fortlaufend vom Server:
             String message;
             while ((message = in.readLine()) != null) {
-                String finalMessage = message;
+                final String finalMessage = message;
                 Platform.runLater(() -> MessengerApp.displayMessage(finalMessage));
             }
         } catch (IOException e) {
@@ -55,12 +49,11 @@ public class ChatClient implements Runnable {
             if (out != null) out.close();
             if (client != null && !client.isClosed()) client.close();
         } catch (IOException e) {
-            // Ignore
+            // ignore
         }
     }
 
     public static void main(String[] args) {
-        // Launch the UI and start the client logic
         Platform.startup(() -> {
             Stage primaryStage = new Stage();
             MessengerApp messengerApp = new MessengerApp();
@@ -69,8 +62,6 @@ public class ChatClient implements Runnable {
             } catch (Exception e) {
                 e.printStackTrace();
             }
-
-            // Start the ChatClient in a new thread
             ChatClient client = new ChatClient();
             Thread clientThread = new Thread(client);
             clientThread.start();

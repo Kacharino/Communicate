@@ -8,26 +8,49 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Diese Klasse repräsentiert einen einfachen Chat-Server, der mehrere Clients
+ * simultan bedienen kann. Sie bietet öffentliche Nachrichten (Broadcast) sowie
+ * Direktnachrichten zwischen einzelnen Benutzern.
+ * <p>
+ * Der Server speichert alle gesendeten Nachrichten in einer Datei (chat_history.txt).
+ * Zusätzlich verwaltet er mithilfe einer UserManager-Instanz die Registrierung
+ * und das Login von Benutzern (users.txt).
+ */
 public class Server implements Runnable {
 
     private final ServerSocket server;
     private boolean isRunning;
 
     private final List<ConnectionHandler> connections;
-    private final Map<String, ConnectionHandler> userMap;   // <--- NEU: username -> handler
+    private final Map<String, ConnectionHandler> userMap;   // username -> ConnectionHandler
 
     private final File chatHistoryFile;
     private final UserManager userManager;
 
+    /**
+     * Erstellt einen neuen Server-Socket auf dem angegebenen Port und bereitet
+     * die nötigen Datenstrukturen für den Chatbetrieb vor.
+     *
+     * @param port der Port, auf dem der Server lauschen soll
+     * @throws IOException falls der ServerSocket nicht geöffnet werden kann
+     */
     public Server(int port) throws IOException {
         this.server = new ServerSocket(port);
         this.isRunning = true;
         this.connections = new CopyOnWriteArrayList<>();
-        this.userMap = new ConcurrentHashMap<>();  // Thread-sicher
+        this.userMap = new ConcurrentHashMap<>();
         this.chatHistoryFile = new File("chat_history.txt");
         this.userManager = new UserManager("users.txt");
     }
 
+    /**
+     * Startet die Hauptschleife des Servers. Nimmt neue Client-Verbindungen an und
+     * erzeugt für jede Verbindung einen eigenen Thread (ConnectionHandler).
+     * <p>
+     * Sollte isRunning false sein, wird die Schleife beendet und keine neuen
+     * Verbindungen mehr angenommen.
+     */
     @Override
     public void run() {
         System.out.println("Server started on port " + server.getLocalPort());
@@ -46,7 +69,10 @@ public class Server implements Runnable {
     }
 
     /**
-     * Broadcast an alle (öffentliche Nachricht).
+     * Sendet eine öffentliche Nachricht (Broadcast) an alle verbundenen Clients
+     * und speichert diese zusätzlich in der Chat-Historie.
+     *
+     * @param message die zu broadcastende Nachricht
      */
     public synchronized void broadcast(String message) {
         saveMessageToFile(message);
@@ -56,33 +82,39 @@ public class Server implements Runnable {
     }
 
     /**
-     * Direkte Nachricht an einen bestimmten User (falls online).
-     * Speichern wir ebenfalls in derselben History-Datei.
+     * Sendet eine Direktnachricht von einem Absender zu einem Empfänger (falls
+     * dieser online ist). Die Nachricht wird ebenfalls in der Chat-Historie
+     * abgelegt.
+     *
+     * @param fromUser Name des sendenden Benutzers
+     * @param toUser   Name des Ziel-Benutzers
+     * @param msg      Inhalt der Nachricht
      */
     public synchronized void sendDirectMessage(String fromUser, String toUser, String msg) {
         ConnectionHandler targetHandler = userMap.get(toUser);
         ConnectionHandler fromHandler = userMap.get(fromUser);
 
         String directMsg = "[DM] " + fromUser + " -> " + toUser + ": " + msg;
-        // In Datei speichern
         saveMessageToFile(directMsg);
 
         if (targetHandler != null) {
-            // An Empfänger schicken
             targetHandler.sendMessage(directMsg);
         } else {
-            // Empfänger nicht eingeloggt
             if (fromHandler != null) {
                 fromHandler.sendMessage("User '" + toUser + "' not found or not logged in.");
             }
         }
-
-        // Optional: auch an den Sender schicken, damit er sieht, was er verschickt hat.
+        // Sender sieht die eigene Nachricht ebenfalls als Bestätigung
         if (fromHandler != null) {
             fromHandler.sendMessage(directMsg);
         }
     }
 
+    /**
+     * Schreibt eine gegebene Nachricht in die Datei chat_history.txt.
+     *
+     * @param message die zu speichernde Nachricht
+     */
     private void saveMessageToFile(String message) {
         try (FileWriter fw = new FileWriter(chatHistoryFile, true)) {
             fw.write(message + "\n");
@@ -91,6 +123,12 @@ public class Server implements Runnable {
         }
     }
 
+    /**
+     * Lädt alle bisher gespeicherten Nachrichten aus chat_history.txt.
+     *
+     * @return kompletter Chatverlauf als String oder ein leerer String,
+     *         falls keine Datei vorhanden bzw. noch keine Nachrichten existieren
+     */
     private String loadChatHistory() {
         if (!chatHistoryFile.exists()) {
             return "";
@@ -107,6 +145,10 @@ public class Server implements Runnable {
         return sb.toString();
     }
 
+    /**
+     * Beendet den Server-Betrieb und schließt alle offenen Verbindungen.
+     * Anschließend werden keine neuen Clients mehr angenommen.
+     */
     public void shutdown() {
         isRunning = false;
         try {
@@ -122,6 +164,11 @@ public class Server implements Runnable {
     // =========================================================
     // =============== INNER CLASS: ConnectionHandler ==========
     // =========================================================
+
+    /**
+     * Dieser ConnectionHandler kümmert sich um die Kommunikation mit einem einzelnen
+     * Client. Pro verbundenem Client wird eine eigene Instanz erzeugt.
+     */
     private class ConnectionHandler implements Runnable {
 
         private final Socket socket;
@@ -130,11 +177,24 @@ public class Server implements Runnable {
         private boolean loggedIn;
         private String username;
 
+        /**
+         * Erzeugt einen neuen ConnectionHandler für den gegebenen Socket.
+         *
+         * @param socket die Socket-Verbindung zum Client
+         */
         public ConnectionHandler(Socket socket) {
             this.socket = socket;
             this.loggedIn = false;
         }
 
+        /**
+         * Hauptablauf für einen einzelnen Client:
+         * <ul>
+         *   <li>Login-/Registrier-Schleife</li>
+         *   <li>Senden des vorhandenen Chatverlaufs</li>
+         *   <li>Empfangen und Verarbeiten von Chat-Befehlen / Nachrichten</li>
+         * </ul>
+         */
         @Override
         public void run() {
             try {
@@ -154,11 +214,11 @@ public class Server implements Runnable {
                     handleLoginRegister(line);
                 }
 
-                // Sende alten Chat-Verlauf
+                // Chat-Verlauf an neu eingeloggten Nutzer senden
                 String history = loadChatHistory();
                 sendMessage("=== Chat History ===\n" + history + "====================");
 
-                // Nachrichten/Kommandos lesen
+                // Eingehende Nachrichten/Befehle verarbeiten
                 String message;
                 while ((message = in.readLine()) != null) {
                     if (message.startsWith("/quit")) {
@@ -178,7 +238,7 @@ public class Server implements Runnable {
                         }
 
                     } else {
-                        // Öffentliche Nachricht an alle
+                        // Öffentliche Nachricht
                         broadcast(username + ": " + message);
                     }
                 }
@@ -188,6 +248,12 @@ public class Server implements Runnable {
             }
         }
 
+        /**
+         * Verarbeitet Login- und Registrierungsbefehle des Clients.
+         * Ist der Nutzer erfolgreich eingeloggt, wird loggedIn auf true gesetzt.
+         *
+         * @param input Textzeile, die der Client geschickt hat (z.B. "/login Alice 1234")
+         */
         private void handleLoginRegister(String input) {
             if (input.startsWith("/login ")) {
                 String[] parts = input.split(" ", 3);
@@ -203,7 +269,7 @@ public class Server implements Runnable {
                     if (userManager.checkPassword(user, pass)) {
                         this.username = user;
                         this.loggedIn = true;
-                        // In userMap eintragen, damit er DMs empfangen kann
+                        // Ermögliche Direktnachrichten (Key in userMap)
                         userMap.put(username, this);
                         sendMessage("Login successful. Welcome, " + username + "!");
                     } else {
@@ -233,13 +299,21 @@ public class Server implements Runnable {
             }
         }
 
+        /**
+         * Sendet eine Nachricht direkt an diesen Client.
+         *
+         * @param msg Text, der an den Client gesendet wird
+         */
         public void sendMessage(String msg) {
             out.println(msg);
         }
 
+        /**
+         * Schließt die Verbindung zum Client und entfernt ihn aus
+         * allen relevanten Datenstrukturen.
+         */
         public void closeConnection() {
             try {
-                // Aus der userMap entfernen
                 if (username != null) {
                     userMap.remove(username);
                 }
@@ -254,6 +328,12 @@ public class Server implements Runnable {
         }
     }
 
+    /**
+     * Einstiegspunkt des Programms: Erzeugt einen Server auf Port 9696 und
+     * startet ihn in einem eigenen Thread.
+     *
+     * @param args nicht verwendet
+     */
     public static void main(String[] args) {
         try {
             Server server = new Server(9696);
